@@ -7,13 +7,6 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 
-const QUALITY_MAP = {
-  "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-  "480p": "bestvideo[height<=480]+bestaudio/best[height<=480]",
-  "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-  "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]"
-};
-
 function isValidUrl(u) {
   try { new URL(u); return true; } catch (e) { return false; }
 }
@@ -65,50 +58,57 @@ app.post("/api/info", function(req, res) {
 app.post("/api/download", function(req, res) {
   var body = req.body || {};
   var url = body.url;
-  var quality = body.quality;
   if (!url || !isValidUrl(url)) return res.status(400).json({ error: "Invalid URL" });
-  var fmt = QUALITY_MAP[quality] || QUALITY_MAP["720p"];
+
   var filename = "video-" + Date.now() + ".mp4";
   var filepath = "/tmp/" + filename;
 
-  var args = [
+  console.log("[download] starting:", url);
+
+  var yt = spawn("yt-dlp", [
     "--no-warnings",
-    "--concurrent-fragments", "4",
-    "--merge-output-format", "mp4",
+    "--no-playlist",
+    "--no-part",
+    "-f", "18/22/best[ext=mp4]/best",
     "-o", filepath,
     url
-  ];
+  ]);
 
-  var yt = spawn("yt-dlp", args);
   var err = "";
+
   yt.stderr.on("data", function(d) {
     err += d.toString();
-    console.log("[yt-dlp stderr]", d.toString());
+    console.log("[stderr]", d.toString().trim());
   });
-  yt.stdout.on("data", function(d) {
-    console.log("[yt-dlp stdout]", d.toString());
-  });
+
   yt.on("error", function(e) {
     console.log("[spawn error]", e.message);
-    res.status(500).json({ error: e.message });
+    if (!res.headersSent) res.status(500).json({ error: e.message });
   });
+
   yt.on("close", function(code) {
-    console.log("[yt-dlp close] code:", code);
-    if (code !== 0) return res.status(500).json({ error: err.split("\n").filter(Boolean).pop() || "Download failed" });
+    console.log("[close] code:", code);
+    if (code !== 0) {
+      if (!res.headersSent) res.status(500).json({ error: err.split("\n").filter(Boolean).pop() || "Download failed" });
+      return;
+    }
     fs.stat(filepath, function(statErr, stats) {
       if (statErr || !stats || stats.size === 0) {
-        return res.status(500).json({ error: "File not found or empty after download" });
+        console.log("[stat error]", statErr);
+        if (!res.headersSent) res.status(500).json({ error: "File empty or not found" });
+        return;
       }
+      console.log("[file size]", stats.size);
       res.setHeader("Content-Type", "video/mp4");
       res.setHeader("Content-Disposition", "attachment; filename=\"" + filename + "\"");
       res.setHeader("Content-Length", stats.size);
       var stream = fs.createReadStream(filepath);
       stream.pipe(res);
-      stream.on("close", function() { fs.unlink(filepath, function() {}); });
+      stream.on("finish", function() {
+        fs.unlink(filepath, function() {});
+      });
     });
   });
-
-  req.on("close", function() { yt.kill("SIGKILL"); });
 });
 
 var PORT = process.env.PORT || 8080;
