@@ -58,11 +58,17 @@ app.post("/api/download", function(req, res) {
   var url = body.url;
   var quality = body.quality;
   if (!url || !isValidUrl(url)) return res.status(400).json({ error: "Invalid URL" });
-  var fmt = QUALITY_MAP[quality] || QUALITY_MAP["720p"];
   var filename = "video-" + Date.now() + ".mp4";
   var filepath = "/tmp/" + filename;
 
-  var yt = spawn("yt-dlp", ["-f", fmt, "--merge-output-format", "mp4", "--no-warnings", "-o", filepath, url]);
+  var yt = spawn("yt-dlp", [
+    "--no-warnings",
+    "--concurrent-fragments", "4",
+    "--merge-output-format", "mp4",
+    "-o", filepath,
+    url
+  ]);
+
   var err = "";
   yt.stderr.on("data", function(d) { err += d.toString(); });
   yt.on("error", function(e) { res.status(500).json({ error: e.message }); });
