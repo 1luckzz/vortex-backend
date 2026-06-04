@@ -1,6 +1,3 @@
-/* eslint-disable */
-// Reference Node + Express + yt-dlp server for the Vortex frontend.
-// Run separately (NOT on Lovable). See ./README.md
 const express = require("express");
 const cors = require("cors");
 const { spawn } = require("child_process");
@@ -25,25 +22,15 @@ app.post("/api/info", (req, res) => {
   if (!url || !isValidUrl(url)) return res.status(400).json({ error: "Invalid URL" });
 
   const yt = spawn("yt-dlp", ["--dump-json", "--no-warnings", url]);
-  let out = "";
-  let err = "";
+  let out = "", err = "";
   yt.stdout.on("data", (d) => (out += d.toString()));
   yt.stderr.on("data", (d) => (err += d.toString()));
   yt.on("error", (e) => res.status(500).json({ error: e.message }));
   yt.on("close", (code) => {
-    if (code !== 0) {
-      const msg = /geo|country|unavailable|private|removed/i.test(err)
-        ? "Video unavailable (geo-blocked, private, or removed)"
-        : err.split("\n").filter(Boolean).pop() || "yt-dlp failed";
-      return res.status(400).json({ error: msg });
-    }
+    if (code !== 0) return res.status(400).json({ error: err.split("\n").filter(Boolean).pop() || "yt-dlp failed" });
     try {
       const data = JSON.parse(out);
-      const heights = new Set(
-        (data.formats || [])
-          .map((f) => f.height)
-          .filter((h) => typeof h === "number")
-      );
+      const heights = new Set((data.formats || []).map((f) => f.height).filter((h) => typeof h === "number"));
       const availableQualities = ["360p", "480p", "720p", "1080p"].filter((q) => {
         const n = parseInt(q, 10);
         return [...heights].some((h) => h >= n - 30);
@@ -65,35 +52,18 @@ app.post("/api/download", (req, res) => {
   const { url, quality } = req.body || {};
   if (!url || !isValidUrl(url)) return res.status(400).json({ error: "Invalid URL" });
   const fmt = QUALITY_MAP[quality] || QUALITY_MAP["720p"];
-
   const filename = `video-${Date.now()}.mp4`;
-  res.setHeader("Content-Type", "video/mp4");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
   const yt = spawn("yt-dlp", [
     "-f", fmt,
     "--merge-output-format", "mp4",
-    "-o", "-",
     "--no-warnings",
+    "-o", `/tmp/${filename}`,
     url,
   ]);
 
-  yt.stdout.pipe(res);
-
   let err = "";
   yt.stderr.on("data", (d) => (err += d.toString()));
-  yt.on("error", (e) => {
-    if (!res.headersSent) res.status(500).json({ error: e.message });
-    else res.end();
-  });
+  yt.on("error", (e) => res.status(500).json({ error: e.message }));
   yt.on("close", (code) => {
-    if (code !== 0 && !res.writableEnded) {
-      res.end();
-      console.error("yt-dlp failed:", err);
-    }
-  });
-  req.on("close", () => yt.kill("SIGKILL"));
-});
-
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`Vortex backend listening on :${PORT}`));
+    if (code !== 0) return res.status(500).json({ error: err.split("\n").filter(Boolean).pop() || "Download
